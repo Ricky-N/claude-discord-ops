@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-discord-ops",
+  "description": "Ops-oriented Discord channel plugin for Claude Code — bot embeds, reaction tracking, thread monitoring, chat queue",
+  "owner": {
+    "name": "Ricky Niemi"
+  },
+  "plugins": [
+    {
+      "name": "discord",
+      "description": "Ops-oriented Discord channel — bot embed support, reaction tracking, thread monitoring, and a persistent chat queue so messages are never dropped during deep work.",
+      "category": "productivity",
+      "source": "./discord"
+    }
+  ]
+}
