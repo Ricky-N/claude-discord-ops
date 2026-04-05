@@ -94,7 +94,7 @@ received → pending → acked → responded
 ```
 
 - **Auto-respond**: When you `reply` to a channel, all pending/acked entries for that `chat_id` transition to `responded`. No extra tool call needed.
-- **Escalation**: Messages sitting in `pending` state longer than `queueEscalationMinutes` (default: 5) get re-delivered as a reminder. Stops after `queueMaxEscalations` (default: 3) reminders.
+- **Escalation with backoff**: Unresponded messages get a consolidated reminder with exponential backoff. Default: first reminder at ~10min, then ~30min, then ~90min. Three reminders over ~2 hours instead of rapid-fire interruptions.
 - **Ack to pause**: Call `ack_message` when you've seen something but need time. Acked messages don't escalate.
 - **Auto-cleanup**: Responded entries prune after 1 hour. Stale pending entries prune after 24 hours.
 
@@ -104,8 +104,9 @@ Add to `access.json`:
 
 ```jsonc
 {
-  // Minutes before re-notifying about a pending message. Default: 5. Set 0 to disable.
-  "queueEscalationMinutes": 5,
+  // Base minutes before first reminder. Exponential backoff: base * 3^n.
+  // Default: 10. With max=3: reminders at ~10m, ~30m, ~90m. Set 0 to disable.
+  "queueEscalationBaseMinutes": 10,
   // Max re-notifications per message. Default: 3.
   "queueMaxEscalations": 3
 }
