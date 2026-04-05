@@ -31,7 +31,7 @@ import {
   type Interaction,
 } from 'discord.js'
 import { randomBytes } from 'crypto'
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, renameSync, realpathSync, chmodSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, renameSync, realpathSync, chmodSync, openSync, ftruncateSync } from 'fs'
 import { homedir } from 'os'
 import { join, sep } from 'path'
 
@@ -40,6 +40,22 @@ const ACCESS_FILE = join(STATE_DIR, 'access.json')
 const APPROVED_DIR = join(STATE_DIR, 'approved')
 const ENV_FILE = join(STATE_DIR, '.env')
 const QUEUE_FILE = join(STATE_DIR, 'queue.json')
+const LOG_FILE = join(STATE_DIR, 'discord-plugin.log')
+
+// Tee stderr to a log file so Claude can read plugin diagnostics via Read tool.
+// Truncates on startup if over 200KB to prevent unbounded growth.
+try {
+  const fd = openSync(LOG_FILE, 'a')
+  try {
+    const st = statSync(LOG_FILE)
+    if (st.size > 200_000) ftruncateSync(fd, 0)
+  } catch {}
+  const origWrite = process.stderr.write.bind(process.stderr)
+  process.stderr.write = ((chunk: any, ...rest: any[]) => {
+    try { writeFileSync(fd, typeof chunk === 'string' ? chunk : chunk.toString()) } catch {}
+    return (origWrite as any)(chunk, ...rest)
+  }) as any
+} catch {}
 
 // Load ~/.claude/channels/discord/.env into process.env. Real env wins.
 // Plugin-spawned servers don't get an env block — this is where the token lives.
