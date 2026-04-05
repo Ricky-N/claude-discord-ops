@@ -123,9 +123,9 @@ type Access = {
   textChunkLimit?: number
   /** Split on paragraph boundaries instead of hard char count. */
   chunkMode?: 'length' | 'newline'
-  /** Minutes before an unresponded message gets re-notified. Default: 5. 0 disables. */
-  queueEscalationMinutes?: number
-  /** Maximum re-notifications per message. Default: 3. */
+  /** Base minutes before first re-notification. Subsequent reminders use exponential backoff (base * 3^n). Default: 10. 0 disables. */
+  queueEscalationBaseMinutes?: number
+  /** Maximum re-notifications per message. Default: 3. With base=10 and backoff=3x, reminders land at ~10m, ~30m, ~90m. */
   queueMaxEscalations?: number
 }
 
@@ -244,20 +244,27 @@ function pruneQueue(): void {
 }
 
 // Escalation: re-notify about messages that have been pending too long.
+// Uses exponential backoff: base * 3^(notifyCount - 1).
+// With base=10min: reminders at ~10m, ~30m, ~90m.
 // Returns entries that need re-notification.
-function getEscalatableEntries(escalationMinutes: number, maxEscalations: number): QueueEntry[] {
-  if (escalationMinutes <= 0) return []
+function getEscalatableEntries(baseMinutes: number, maxEscalations: number): QueueEntry[] {
+  if (baseMinutes <= 0) return []
   const q = readQueue()
   const now = Date.now()
-  const threshold = escalationMinutes * 60 * 1000
   const escalatable: QueueEntry[] = []
   let changed = false
 
   for (const entry of q.entries) {
     if (entry.state !== 'pending') continue
     if (entry.notifyCount >= maxEscalations) continue
+    // Exponential backoff: base * 3^(attempts so far - 1)
+    // notifyCount=1 (initial delivery) → first reminder after base minutes
+    // notifyCount=2 (first reminder) → second reminder after base*3 minutes
+    // notifyCount=3 (second reminder) → third reminder after base*9 minutes
+    const backoff = baseMinutes * Math.pow(3, entry.notifyCount - 1)
+    const thresholdMs = backoff * 60 * 1000
     const sinceLastNotify = now - new Date(entry.lastNotifyAt).getTime()
-    if (sinceLastNotify >= threshold) {
+    if (sinceLastNotify >= thresholdMs) {
       entry.notifyCount++
       entry.lastNotifyAt = new Date().toISOString()
       escalatable.push({ ...entry })
@@ -334,7 +341,7 @@ function readAccessFile(): Access {
       replyToMode: parsed.replyToMode,
       textChunkLimit: parsed.textChunkLimit,
       chunkMode: parsed.chunkMode,
-      queueEscalationMinutes: parsed.queueEscalationMinutes,
+      queueEscalationBaseMinutes: parsed.queueEscalationBaseMinutes,
       queueMaxEscalations: parsed.queueMaxEscalations,
     }
   } catch (err) {
@@ -543,39 +550,56 @@ function checkApprovals(): void {
 if (!STATIC) setInterval(checkApprovals, 5000).unref()
 
 // Queue maintenance: prune old entries and escalate stale ones.
+// Escalation is consolidated — one notification listing all overdue messages,
+// not N individual re-fires that each eat context.
 function queueMaintenance(): void {
   pruneQueue()
 
   const access = loadAccess()
-  const escalationMinutes = access.queueEscalationMinutes ?? 5
+  const baseMinutes = access.queueEscalationBaseMinutes ?? 10
   const maxEscalations = access.queueMaxEscalations ?? 3
-  const entries = getEscalatableEntries(escalationMinutes, maxEscalations)
+  const entries = getEscalatableEntries(baseMinutes, maxEscalations)
 
-  for (const entry of entries) {
-    const age = Math.round((Date.now() - new Date(entry.ts).getTime()) / 60000)
-    process.stderr.write(`discord queue: escalating ${entry.messageId} from ${entry.user} (${age}m old, notify #${entry.notifyCount})\n`)
-    mcp.notification({
-      method: 'notifications/claude/channel',
-      params: {
-        content: `[queue reminder #${entry.notifyCount}] ${entry.user} (${age}m ago): ${entry.content}`,
-        meta: {
-          chat_id: entry.chatId,
-          message_id: entry.messageId,
-          user: entry.user,
-          user_id: entry.userId,
-          ts: entry.ts,
-        },
+  if (entries.length === 0) return
+
+  // Build a single consolidated reminder
+  const now = Date.now()
+  const lines = entries.map(e => {
+    const age = Math.round((now - new Date(e.ts).getTime()) / 60000)
+    const ageStr = age < 60 ? `${age}m` : `${Math.floor(age / 60)}h${age % 60}m`
+    process.stderr.write(`discord queue: escalating ${e.messageId} from ${e.user} (${ageStr} old, notify #${e.notifyCount})\n`)
+    return `- ${e.user} (${ageStr} ago, chat_id: ${e.chatId}): ${e.content.slice(0, 100)}`
+  })
+
+  const content = entries.length === 1
+    ? `[reminder] Unresponded message:\n${lines[0]}`
+    : `[reminder] ${entries.length} unresponded messages:\n${lines.join('\n')}`
+
+  // Use the first entry's meta for the notification envelope — Claude needs
+  // a chat_id to reply to. If there are multiple channels, Claude will see
+  // the chat_ids in the message body and can reply to each.
+  const first = entries[0]
+  mcp.notification({
+    method: 'notifications/claude/channel',
+    params: {
+      content,
+      meta: {
+        chat_id: first.chatId,
+        message_id: first.messageId,
+        user: 'queue',
+        user_id: '0',
+        ts: new Date().toISOString(),
       },
-    }).catch(err => {
-      process.stderr.write(`discord queue: escalation notify failed: ${err}\n`)
-    })
-  }
+    },
+  }).catch(err => {
+    process.stderr.write(`discord queue: escalation notify failed: ${err}\n`)
+  })
 }
 
-// Run queue maintenance every 60s. Escalation timing is checked against
-// lastNotifyAt inside getEscalatableEntries, so a 60s poll is fine for
-// a 5-minute default escalation window.
-setInterval(queueMaintenance, 60_000).unref()
+// Run queue maintenance every 3 minutes. With a 10-minute base escalation
+// window and exponential backoff, a 3-minute poll gives ±3min accuracy
+// on the first reminder — tight enough without wasting cycles.
+setInterval(queueMaintenance, 3 * 60_000).unref()
 
 // Discord caps messages at 2000 chars (hard limit — larger sends reject).
 // Split long replies, preferring paragraph boundaries when chunkMode is
@@ -1346,25 +1370,32 @@ client.once('ready', c => {
   const unresponded = getUnrespondedEntries()
   if (unresponded.length > 0) {
     process.stderr.write(`discord queue: ${unresponded.length} unresponded message(s) from previous session — re-delivering\n`)
-    for (const entry of unresponded) {
-      const age = Math.round((Date.now() - new Date(entry.ts).getTime()) / 60000)
+    // Consolidated: one notification with all pending, not N individual ones.
+    const now = Date.now()
+    const lines = unresponded.map(e => {
+      const age = Math.round((now - new Date(e.ts).getTime()) / 60000)
       const ageStr = age < 60 ? `${age}m` : `${Math.floor(age / 60)}h${age % 60}m`
-      mcp.notification({
-        method: 'notifications/claude/channel',
-        params: {
-          content: `[from previous session, ${ageStr} ago] ${entry.user}: ${entry.content}`,
-          meta: {
-            chat_id: entry.chatId,
-            message_id: entry.messageId,
-            user: entry.user,
-            user_id: entry.userId,
-            ts: entry.ts,
-          },
+      return `- ${e.user} (${ageStr} ago, chat_id: ${e.chatId}): ${e.content.slice(0, 100)}`
+    })
+    const content = unresponded.length === 1
+      ? `[from previous session] Unresponded message:\n${lines[0]}`
+      : `[from previous session] ${unresponded.length} unresponded messages:\n${lines.join('\n')}`
+    const first = unresponded[0]
+    mcp.notification({
+      method: 'notifications/claude/channel',
+      params: {
+        content,
+        meta: {
+          chat_id: first.chatId,
+          message_id: first.messageId,
+          user: 'queue',
+          user_id: '0',
+          ts: new Date().toISOString(),
         },
-      }).catch(err => {
-        process.stderr.write(`discord queue: startup re-delivery failed for ${entry.messageId}: ${err}\n`)
-      })
-    }
+      },
+    }).catch(err => {
+      process.stderr.write(`discord queue: startup re-delivery failed: ${err}\n`)
+    })
   }
 })
 
