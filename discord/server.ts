@@ -1300,12 +1300,10 @@ async function handleInbound(msg: Message): Promise<void> {
     return
   }
 
-  // Typing indicator — signals "processing" until we reply (or ~10s elapses).
-  if ('sendTyping' in msg.channel) {
-    void msg.channel.sendTyping().catch(() => {})
-  }
-
-  // Ack reaction — lets the user know we're processing. Fire-and-forget.
+  // Ack reaction — lets the user know we saw the message. Fire-and-forget.
+  // No typing indicator here — Claude only responds to ~20% of messages,
+  // and a typing indicator on every inbound is misleading. The ack emoji
+  // is the receipt signal. The response itself (if any) is the next signal.
   const access = result.access
   if (access.ackReaction) {
     void msg.react(access.ackReaction).catch(() => {})
