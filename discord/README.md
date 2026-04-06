@@ -116,6 +116,46 @@ Add to `access.json`:
 
 See **[ACCESS.md](./ACCESS.md)** for DM policies, guild channels, mention detection, delivery config, and the `access.json` schema.
 
+## Headless / VM deployment
+
+This plugin works on headless VMs (no human at a terminal). Key notes:
+
+**Launch command:**
+```bash
+claude --dangerously-skip-permissions \
+       --dangerously-load-development-channels plugin:discord@claude-discord-ops
+```
+
+The `--dangerously-load-development-channels` flag is required for custom marketplace plugins not on Anthropic's official approved list. It triggers an interactive confirmation prompt on startup — press Enter to proceed.
+
+**Running as a service:** Claude Code requires a real TTY (it's a TUI app). Use `tmux` to provide one:
+
+```bash
+# Start
+tmux new-session -d -s claude -x 120 -y 40 \
+  'cd /path/to/monorepo && claude --dangerously-skip-permissions --dangerously-load-development-channels plugin:discord@claude-discord-ops'
+sleep 8
+tmux send-keys -t claude Enter   # auto-confirm the dev channels prompt
+
+# Stop
+tmux send-keys -t claude C-c
+sleep 5
+tmux kill-session -t claude
+
+# Check status
+tmux capture-pane -t claude -p | tail -20
+```
+
+**Why not systemd?** Claude Code detects non-interactive terminals and switches to `--print` mode (expects stdin input and exits). The `script` command provides a PTY but can't pass through the interactive confirmation prompt reliably. tmux gives a real terminal that survives SSH disconnects.
+
+**State files that must persist across restarts:**
+- `~/.claude/channels/discord/access.json` — channel configs and user allowlist
+- `~/.claude/channels/discord/queue.json` — pending message queue (recovered on startup)
+- `~/.claude/.credentials.json` — Anthropic OAuth tokens (auto-refreshed)
+- `~/.claude/settings.json` — user-level plugin configuration
+
+**Authentication:** Claude Code uses OAuth with auto-refresh. Run `claude setup-token` on a machine with a browser, then copy `~/.claude/.credentials.json` to the VM. The access token auto-refreshes using the refresh token.
+
 ## Upstream
 
 Derived from [anthropics/claude-plugins-official](https://github.com/anthropics/claude-plugins-official) (Apache-2.0). The official plugin covers core messaging, pairing, and access control. This fork adds the ops layer.
