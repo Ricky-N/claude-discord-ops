@@ -315,6 +315,9 @@ function extractEmbedText(embeds: Message['embeds']): string {
  *  when messageUpdate fires with the resolved embed content. */
 const pendingEmbedMessages = new Map<string, { chatId: string; username: string; userId: string; ts: string }>()
 
+/** Persistent typing indicators — keep "is typing..." visible until we reply. */
+const activeTyping = new Map<string, NodeJS.Timeout>()
+
 function defaultAccess(): Access {
   return {
     dmPolicy: 'pairing',
@@ -436,6 +439,8 @@ async function gate(msg: Message): Promise<GateResult> {
   if (access.dmPolicy === 'disabled') return { action: 'drop' }
 
   const senderId = msg.author.id
+  // Partial DM channels arrive with type=null — fetch to resolve.
+  if (msg.channel.partial) await msg.channel.fetch()
   const isDM = msg.channel.type === ChannelType.DM
 
   if (isDM) {
@@ -924,6 +929,13 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           throw new Error(`reply failed after ${sentIds.length} of ${chunks.length} chunk(s) sent: ${msg}`)
         }
 
+        // Stop the typing indicator now that we're replying.
+        const typingInterval = activeTyping.get(chat_id)
+        if (typingInterval) {
+          clearInterval(typingInterval)
+          activeTyping.delete(chat_id)
+        }
+
         // Auto-transition queue: replying to a channel marks all pending/acked
         // entries for that chat_id as responded.
         const cleared = transitionToResponded(chat_id)
@@ -1300,9 +1312,26 @@ async function handleInbound(msg: Message): Promise<void> {
     return
   }
 
-  // Typing indicator — signals "processing" until we reply (or ~10s elapses).
+  // Typing indicator — keep it alive until we reply (sendTyping lasts ~10s,
+  // so we re-fire every 8s). Cleared in the reply tool handler.
+  // Safety cap: stop after 2 minutes to prevent infinite typing on abandoned messages.
   if ('sendTyping' in msg.channel) {
     void msg.channel.sendTyping().catch(() => {})
+    const prev = activeTyping.get(chat_id)
+    if (prev) clearInterval(prev)
+    const started = Date.now()
+    const interval = setInterval(() => {
+      if (Date.now() - started > 2 * 60 * 1000) {
+        clearInterval(interval)
+        activeTyping.delete(chat_id)
+        return
+      }
+      if ('sendTyping' in msg.channel) {
+        void msg.channel.sendTyping().catch(() => {})
+      }
+    }, 8_000)
+    interval.unref()
+    activeTyping.set(chat_id, interval)
   }
 
   // Ack reaction — lets the user know we're processing. Fire-and-forget.
