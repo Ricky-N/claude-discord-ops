@@ -436,6 +436,8 @@ async function gate(msg: Message): Promise<GateResult> {
   if (access.dmPolicy === 'disabled') return { action: 'drop' }
 
   const senderId = msg.author.id
+  // Partial DM channels arrive with type=null — fetch to resolve.
+  if (msg.channel.partial) await msg.channel.fetch()
   const isDM = msg.channel.type === ChannelType.DM
 
   if (isDM) {
