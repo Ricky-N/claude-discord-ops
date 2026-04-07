@@ -31,7 +31,7 @@ import {
   type Interaction,
 } from 'discord.js'
 import { randomBytes } from 'crypto'
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, renameSync, realpathSync, chmodSync, openSync, ftruncateSync } from 'fs'
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, rmSync, statSync, renameSync, realpathSync, chmodSync, openSync, ftruncateSync } from 'fs'
 import { homedir } from 'os'
 import { join, sep } from 'path'
 
@@ -40,6 +40,7 @@ const ACCESS_FILE = join(STATE_DIR, 'access.json')
 const APPROVED_DIR = join(STATE_DIR, 'approved')
 const ENV_FILE = join(STATE_DIR, '.env')
 const QUEUE_FILE = join(STATE_DIR, 'queue.json')
+const AUDIT_LOG = join(STATE_DIR, 'queue-audit.jsonl')
 const LOG_FILE = join(STATE_DIR, 'discord-plugin.log')
 
 // Tee stderr to a log file so Claude can read plugin diagnostics via Read tool.
@@ -242,21 +243,59 @@ function getUnrespondedEntries(): QueueEntry[] {
     .sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime())
 }
 
+/** Max audit log size before rotation. ~5MB ≈ weeks of history. */
+const AUDIT_LOG_MAX_BYTES = 5 * 1024 * 1024
+
 function pruneQueue(): void {
   const q = readQueue()
   const now = Date.now()
   const ONE_HOUR = 60 * 60 * 1000
   const TWENTY_FOUR_HOURS = 24 * ONE_HOUR
   const before = q.entries.length
-  q.entries = q.entries.filter(e => {
-    // Prune responded entries older than 1h
-    if (e.state === 'responded' && e.respondedAt) {
-      return now - new Date(e.respondedAt).getTime() < ONE_HOUR
+
+  const keep: QueueEntry[] = []
+  const pruned: QueueEntry[] = []
+
+  for (const e of q.entries) {
+    const shouldPrune =
+      (e.state === 'responded' && e.respondedAt && now - new Date(e.respondedAt).getTime() >= ONE_HOUR) ||
+      (now - new Date(e.ts).getTime() >= TWENTY_FOUR_HOURS)
+
+    if (shouldPrune) {
+      pruned.push(e)
+    } else {
+      keep.push(e)
     }
-    // Prune pending/acked entries older than 24h (stale)
-    return now - new Date(e.ts).getTime() < TWENTY_FOUR_HOURS
-  })
-  if (q.entries.length !== before) saveQueue(q)
+  }
+
+  if (pruned.length === 0) return
+
+  // Append pruned entries to the audit log (JSONL — one JSON object per line).
+  // This is the permanent record for evaluating agent performance:
+  //   - response rate: responded vs pending/acked at prune time
+  //   - response time: respondedAt - ts for responded entries
+  //   - channel volume: count by chatId
+  //   - escalation effectiveness: notifyCount distribution
+  try {
+    const prunedAt = new Date().toISOString()
+    const lines = pruned.map(e => JSON.stringify({ ...e, prunedAt })).join('\n') + '\n'
+    appendFileSync(AUDIT_LOG, lines)
+
+    // Rotate audit log if too large — rename to .prev and start fresh
+    try {
+      const st = statSync(AUDIT_LOG)
+      if (st.size > AUDIT_LOG_MAX_BYTES) {
+        renameSync(AUDIT_LOG, AUDIT_LOG + '.prev')
+        process.stderr.write(`discord queue: audit log rotated (${(st.size / 1024 / 1024).toFixed(1)}MB)\n`)
+      }
+    } catch {}
+  } catch (err) {
+    process.stderr.write(`discord queue: audit log write failed: ${err}\n`)
+  }
+
+  q.entries = keep
+  saveQueue(q)
+  process.stderr.write(`discord queue: pruned ${pruned.length} entries (${keep.length} remaining)\n`)
 }
 
 // Escalation: re-notify about messages that have been pending too long.
