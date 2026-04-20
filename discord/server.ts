@@ -243,15 +243,34 @@ function getUnrespondedEntries(): QueueEntry[] {
     .sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime())
 }
 
-/** Max audit log size before rotation. ~5MB ≈ weeks of history. */
-const AUDIT_LOG_MAX_BYTES = 5 * 1024 * 1024
+/** Max audit/changelog log size before rotation. ~5MB ≈ weeks of history. */
+const ROTATING_LOG_MAX_BYTES = 5 * 1024 * 1024
+
+/** Append one JSON record as a JSONL line. Rotates path→path.prev at the size cap.
+ *  Shared by queue-audit.jsonl (prune + filter-hit records) and filter-changelog.jsonl. */
+function appendRotatingJsonl(path: string, records: object | object[]): void {
+  const arr = Array.isArray(records) ? records : [records]
+  if (arr.length === 0) return
+  try {
+    const lines = arr.map(r => JSON.stringify(r)).join('\n') + '\n'
+    appendFileSync(path, lines)
+    try {
+      const st = statSync(path)
+      if (st.size > ROTATING_LOG_MAX_BYTES) {
+        renameSync(path, path + '.prev')
+        process.stderr.write(`discord: rotated ${path} (${(st.size / 1024 / 1024).toFixed(1)}MB)\n`)
+      }
+    } catch {}
+  } catch (err) {
+    process.stderr.write(`discord: jsonl write failed (${path}): ${err}\n`)
+  }
+}
 
 function pruneQueue(): void {
   const q = readQueue()
   const now = Date.now()
   const ONE_HOUR = 60 * 60 * 1000
   const TWENTY_FOUR_HOURS = 24 * ONE_HOUR
-  const before = q.entries.length
 
   const keep: QueueEntry[] = []
   const pruned: QueueEntry[] = []
@@ -270,28 +289,12 @@ function pruneQueue(): void {
 
   if (pruned.length === 0) return
 
-  // Append pruned entries to the audit log (JSONL — one JSON object per line).
-  // This is the permanent record for evaluating agent performance:
-  //   - response rate: responded vs pending/acked at prune time
-  //   - response time: respondedAt - ts for responded entries
-  //   - channel volume: count by chatId
-  //   - escalation effectiveness: notifyCount distribution
-  try {
-    const prunedAt = new Date().toISOString()
-    const lines = pruned.map(e => JSON.stringify({ ...e, prunedAt })).join('\n') + '\n'
-    appendFileSync(AUDIT_LOG, lines)
-
-    // Rotate audit log if too large — rename to .prev and start fresh
-    try {
-      const st = statSync(AUDIT_LOG)
-      if (st.size > AUDIT_LOG_MAX_BYTES) {
-        renameSync(AUDIT_LOG, AUDIT_LOG + '.prev')
-        process.stderr.write(`discord queue: audit log rotated (${(st.size / 1024 / 1024).toFixed(1)}MB)\n`)
-      }
-    } catch {}
-  } catch (err) {
-    process.stderr.write(`discord queue: audit log write failed: ${err}\n`)
-  }
+  // Append pruned entries to the audit log. The audit log is the permanent
+  // record for evaluating agent performance (response rate, response time by
+  // channel, escalation effectiveness) and — via state:"filtered" records
+  // written elsewhere — filter hit counts by pattern.
+  const prunedAt = new Date().toISOString()
+  appendRotatingJsonl(AUDIT_LOG, pruned.map(e => ({ ...e, prunedAt })))
 
   q.entries = keep
   saveQueue(q)
