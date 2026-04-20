@@ -35,13 +35,13 @@ import { readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, rm
 import { homedir } from 'os'
 import { join, sep } from 'path'
 
-const STATE_DIR = process.env.DISCORD_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'discord')
-const ACCESS_FILE = join(STATE_DIR, 'access.json')
+export const STATE_DIR = process.env.DISCORD_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'discord')
+export const ACCESS_FILE = join(STATE_DIR, 'access.json')
 const APPROVED_DIR = join(STATE_DIR, 'approved')
 const ENV_FILE = join(STATE_DIR, '.env')
 const QUEUE_FILE = join(STATE_DIR, 'queue.json')
-const AUDIT_LOG = join(STATE_DIR, 'queue-audit.jsonl')
-const FILTER_CHANGELOG = join(STATE_DIR, 'filter-changelog.jsonl')
+export const AUDIT_LOG = join(STATE_DIR, 'queue-audit.jsonl')
+export const FILTER_CHANGELOG = join(STATE_DIR, 'filter-changelog.jsonl')
 const LOG_FILE = join(STATE_DIR, 'discord-plugin.log')
 
 // Tee stderr to a log file so Claude can read plugin diagnostics via Read tool.
@@ -73,7 +73,7 @@ try {
 const TOKEN = process.env.DISCORD_BOT_TOKEN
 const STATIC = process.env.DISCORD_ACCESS_MODE === 'static'
 
-if (!TOKEN) {
+if (!TOKEN && import.meta.main) {
   process.stderr.write(
     `discord channel: DISCORD_BOT_TOKEN required\n` +
     `  set in ${ENV_FILE}\n` +
@@ -131,7 +131,7 @@ type GroupPolicy = {
 
 /** Regex-matched inbound filter for bot-authored messages. Cost-management lever, not a security boundary.
  *  See FILTERS.md. Human-authored messages are NEVER matched, regardless of config — enforced in matchFilter(). */
-type FilterPattern = {
+export type FilterPattern = {
   /** Stable identifier, echoed in queue-audit.jsonl on every match. */
   id: string
   /** One-line human-readable purpose. */
@@ -147,7 +147,7 @@ type FilterPattern = {
 }
 
 /** Per-channel batching config. Coalesces bursty signals into one aggregated wake-up. */
-type BatchConfig = {
+export type BatchConfig = {
   enabled: boolean
   /** Quiet period after the last message before the batch flushes. */
   debounceMs: number
@@ -160,7 +160,7 @@ type BatchConfig = {
   keyBy: 'channel' | 'thread'
 }
 
-type Access = {
+export type Access = {
   dmPolicy: 'pairing' | 'allowlist' | 'disabled'
   allowFrom: string[]
   /** Keyed on channel ID (snowflake), not guild ID. One entry per guild channel. */
@@ -293,11 +293,11 @@ function getUnrespondedEntries(): QueueEntry[] {
 }
 
 /** Max audit/changelog log size before rotation. ~5MB ≈ weeks of history. */
-const ROTATING_LOG_MAX_BYTES = 5 * 1024 * 1024
+export const ROTATING_LOG_MAX_BYTES = 5 * 1024 * 1024
 
 /** Append one JSON record as a JSONL line. Rotates path→path.prev at the size cap.
  *  Shared by queue-audit.jsonl (prune + filter-hit records) and filter-changelog.jsonl. */
-function appendRotatingJsonl(path: string, records: object | object[]): void {
+export function appendRotatingJsonl(path: string, records: object | object[]): void {
   const arr = Array.isArray(records) ? records : [records]
   if (arr.length === 0) return
   try {
@@ -434,7 +434,7 @@ function assertSendable(f: string): void {
   }
 }
 
-function readAccessFile(): Access {
+export function readAccessFile(): Access {
   try {
     const raw = readFileSync(ACCESS_FILE, 'utf8')
     const parsed = JSON.parse(raw) as Partial<Access>
@@ -484,7 +484,7 @@ function loadAccess(): Access {
   return BOOT_ACCESS ?? readAccessFile()
 }
 
-function saveAccess(a: Access): void {
+export function saveAccess(a: Access): void {
   if (STATIC) return
   mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
   const tmp = ACCESS_FILE + '.tmp'
@@ -498,7 +498,7 @@ function saveAccess(a: Access): void {
  *  provides atomic read-fresh-then-write semantics and the static-mode guard.
  *  Callers should NOT mutate dmPolicy / allowFrom / groups / pending here —
  *  those go through the /discord:access skill. */
-function mutateCostConfig(mutator: (a: Access) => void): Access {
+export function mutateCostConfig(mutator: (a: Access) => void): Access {
   if (STATIC) throw new Error('refusing to mutate access.json in static mode (DISCORD_ACCESS_MODE=static)')
   const fresh = readAccessFile()
   mutator(fresh)
@@ -672,7 +672,10 @@ function checkApprovals(): void {
   }
 }
 
-if (!STATIC) setInterval(checkApprovals, 5000).unref()
+// Runtime side effects gated on import.meta.main so tests can import the
+// helpers above without starting the approval poller, the queue maintenance
+// loop, the MCP stdio transport, or the Discord gateway login.
+if (import.meta.main && !STATIC) setInterval(checkApprovals, 5000).unref()
 
 // Queue maintenance: prune old entries and escalate stale ones.
 // Escalation is consolidated — one notification listing all overdue messages,
@@ -724,7 +727,7 @@ function queueMaintenance(): void {
 // Run queue maintenance every 3 minutes. With a 10-minute base escalation
 // window and exponential backoff, a 3-minute poll gives ±3min accuracy
 // on the first reminder — tight enough without wasting cycles.
-setInterval(queueMaintenance, 3 * 60_000).unref()
+if (import.meta.main) setInterval(queueMaintenance, 3 * 60_000).unref()
 
 // Discord caps messages at 2000 chars (hard limit — larger sends reject).
 // Split long replies, preferring paragraph boundaries when chunkMode is
@@ -808,7 +811,7 @@ function safeAttName(att: Attachment): string {
  *  of pattern config. This is what makes filters a cost lever and not a
  *  security surface — a typo or prompt-injection-driven filter add cannot
  *  silence a human. */
-function matchFilter(msg: Message, content: string, access: Access): FilterPattern | null {
+export function matchFilter(msg: Message, content: string, access: Access): FilterPattern | null {
   if (!msg.author.bot) return null
 
   const channelKey = msg.channel.isThread()
@@ -887,12 +890,12 @@ const batchBuffers = new Map<string, BatchBuffer>()
 
 /** Return batching config for this channel if enabled, else null. Caller passes
  *  the parent channel ID (threads inherit their parent's batching config). */
-function shouldBatch(parentChannelId: string, access: Access): BatchConfig | null {
+export function shouldBatch(parentChannelId: string, access: Access): BatchConfig | null {
   const cfg = access.batching?.[parentChannelId]
   return cfg?.enabled ? cfg : null
 }
 
-function queueForBatch(
+export function queueForBatch(
   msg: Message,
   chatId: string,
   parentChannelId: string,
@@ -930,7 +933,7 @@ function queueForBatch(
 /** Enqueue each buffered message individually, then emit ONE consolidated
  *  notification. Called by debounce/max-delay timer, by max-batch-size
  *  trigger, or by shutdown. */
-function flushBatch(batchKey: string): void {
+export function flushBatch(batchKey: string): void {
   const buf = batchBuffers.get(batchKey)
   if (!buf) return
   batchBuffers.delete(batchKey)
@@ -976,9 +979,13 @@ function flushBatch(batchKey: string): void {
 
 /** Flush all pending batches immediately. Called on shutdown so in-flight
  *  debounce timers don't drop batched messages. */
-function flushAllBatches(): void {
+export function flushAllBatches(): void {
   for (const k of [...batchBuffers.keys()]) flushBatch(k)
 }
+
+/** Test hook — exposes the in-memory batch buffer map so tests can inspect
+ *  pending batches without waiting for a timer. Not used at runtime. */
+export function _getBatchBuffers() { return batchBuffers }
 
 // ─── End Batching ───────────────────────────────────────────────────
 
@@ -986,7 +993,7 @@ function flushAllBatches(): void {
 /** Parse a Discord message into plain content (with embed text merged) plus
  *  attachment labels. Shared by deliverOrFilter and by tools that format
  *  messages for Claude (e.g. fetch_messages). */
-function buildPayload(msg: Message): { content: string; attachments: string[] } {
+export function buildPayload(msg: Message): { content: string; attachments: string[] } {
   const atts: string[] = []
   for (const att of msg.attachments.values()) {
     const kb = (att.size / 1024).toFixed(0)
@@ -1543,7 +1550,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
   }
 })
 
-await mcp.connect(new StdioServerTransport())
+if (import.meta.main) await mcp.connect(new StdioServerTransport())
 
 // When Claude Code closes the MCP connection, stdin gets EOF. Without this
 // the gateway stays connected as a zombie holding resources.
@@ -1558,10 +1565,12 @@ function shutdown(): void {
   setTimeout(() => process.exit(0), 2000)
   void Promise.resolve(client.destroy()).finally(() => process.exit(0))
 }
-process.stdin.on('end', shutdown)
-process.stdin.on('close', shutdown)
-process.on('SIGTERM', shutdown)
-process.on('SIGINT', shutdown)
+if (import.meta.main) {
+  process.stdin.on('end', shutdown)
+  process.stdin.on('close', shutdown)
+  process.on('SIGTERM', shutdown)
+  process.on('SIGINT', shutdown)
+}
 
 client.on('error', err => {
   process.stderr.write(`discord channel: client error: ${err}\n`)
@@ -1875,7 +1884,7 @@ client.once('ready', c => {
 
 process.stderr.write(`discord channel: MCP server created, connecting transport...\n`)
 
-client.login(TOKEN).catch(err => {
+if (import.meta.main) client.login(TOKEN!).catch(err => {
   process.stderr.write(`discord channel: login failed: ${err}\n`)
   process.exit(1)
 })
