@@ -1,5 +1,11 @@
 # Discord — Access & Delivery
 
+This doc covers the **security-boundary keys** in `access.json` (`dmPolicy`, `allowFrom`, `groups`, `pending`) and the delivery/UX knobs (`ackReaction`, `replyToMode`, `textChunkLimit`, `chunkMode`, `mentionPatterns`). These keys are edited by the `/discord:access` skill, which runs in the user's terminal.
+
+For **cost-management keys** (`filters`, `batching`, `reactions`) — the noise-filtering and batching layer Claude tunes itself — see **[FILTERS.md](./FILTERS.md)**.
+
+---
+
 Discord only allows DMs between accounts that share a server. Who can DM your bot depends on where it's installed: one private server means only that server's members can reach it; a public community means every member there can open a DM.
 
 The **Public Bot** toggle in the Developer Portal (Bot tab, on by default) controls who can add the bot to new servers. Turn it off and only your own account can install it. This is your first gate, and it's enforced by Discord rather than by this process.
