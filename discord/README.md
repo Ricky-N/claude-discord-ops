@@ -55,6 +55,23 @@ DM your bot — it replies with a pairing code. In Claude Code:
 /discord:access pair <code>
 ```
 
+## Updating
+
+```
+claude plugin update discord@Ricky-N/claude-discord-ops
+```
+
+Each release bumps the `version` field in `plugin.json`, which is what Claude Code's plugin manager keys `update` off. If the client reports you're already on the latest version but you're sure you aren't (e.g. a new tool isn't showing up), force-reinstall:
+
+```
+claude plugin uninstall discord@Ricky-N/claude-discord-ops
+claude plugin install   discord@Ricky-N/claude-discord-ops
+```
+
+Release notes: https://github.com/Ricky-N/claude-discord-ops/releases
+
+Maintainers: see [RELEASE.md](../RELEASE.md) for the version-bump discipline and CI enforcement.
+
 ## Bot message channels
 
 To forward bot/webhook messages in a guild channel, add `allowBotMessages: true` to that channel's config in `access.json`:

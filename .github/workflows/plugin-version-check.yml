@@ -1,0 +1,45 @@
+# Fails any PR that modifies discord/** without bumping version in
+# discord/.claude-plugin/plugin.json. Claude Code's plugin manager keys
+# `claude plugin update` off that field — if the version is unchanged,
+# consumers stay pinned to the SHA they installed at. See RELEASE.md.
+
+name: plugin version bump
+
+on:
+  pull_request:
+    paths:
+      - 'discord/**'
+
+jobs:
+  verify-bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify plugin.json version was bumped
+        run: |
+          set -euo pipefail
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          MANIFEST="discord/.claude-plugin/plugin.json"
+
+          HEAD_VERSION=$(jq -r '.version' "$MANIFEST")
+
+          # First release on the default branch won't have a base manifest.
+          if ! git cat-file -e "${BASE_SHA}:${MANIFEST}" 2>/dev/null; then
+            echo "No base manifest at ${BASE_SHA}:${MANIFEST} — treating as first release."
+            echo "Head version: ${HEAD_VERSION}"
+            exit 0
+          fi
+
+          BASE_VERSION=$(git show "${BASE_SHA}:${MANIFEST}" | jq -r '.version')
+
+          if [ "$BASE_VERSION" = "$HEAD_VERSION" ]; then
+            echo "::error file=${MANIFEST}::This PR modifies discord/ but plugin.json version is unchanged (${BASE_VERSION})."
+            echo "::error file=${MANIFEST}::Bump the version field so 'claude plugin update' can fetch the new code."
+            echo "::error file=${MANIFEST}::See RELEASE.md for the rule and semver guidance."
+            exit 1
+          fi
+
+          echo "Plugin version bumped: ${BASE_VERSION} → ${HEAD_VERSION} ✓"

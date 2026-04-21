@@ -1,7 +1,7 @@
 {
   "name": "discord",
   "description": "Ops-oriented Discord channel for Claude Code \u2014 bot embed support, reaction tracking, thread monitoring, and a chat queue so nothing gets dropped. Built on the official Anthropic Discord plugin.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "keywords": [
     "discord",
     "messaging",
