@@ -27,23 +27,27 @@ Keep `discord/package.json` `version` in sync with `plugin.json` for clarity. On
 ## Cutting a release
 
 1. **On the PR that ships the change:**
-   - Bump `version` in `discord/.claude-plugin/plugin.json` (and `discord/package.json`).
+   - Bump `version` in `discord/.claude-plugin/plugin.json` (and keep `discord/package.json` in sync).
    - Merge to main. CI blocks the merge if the bump was missing.
 
-2. **After merge, tag and publish release notes:**
+2. **After merge, from a clean checkout of `main`:**
    ```sh
-   git checkout main && git pull
-   git tag -a v0.2.0 -m "v0.2.0: <one-line summary>"
-   git push origin v0.2.0
-   gh release create v0.2.0 --title "v0.2.0" --notes-file -  # or --notes "..."
+   scripts/release.sh
    ```
+
+   The script reads the version from `plugin.json`, previews the commits
+   going out, asks you to confirm, then tags + pushes + creates the GitHub
+   Release. No arguments — the manifest is the single source of truth for
+   the version. See [`scripts/release.sh`](./scripts/release.sh) for the
+   preflight checks and notes behavior.
 
 3. **Consumers update:**
    ```sh
    claude plugin update discord@Ricky-N/claude-discord-ops
    ```
+
    If the update client reports they're already current but you know they
-   aren't, force-reinstall:
+   aren't (e.g. a new tool isn't showing up), force-reinstall:
    ```sh
    claude plugin uninstall discord@Ricky-N/claude-discord-ops
    claude plugin install   discord@Ricky-N/claude-discord-ops
