@@ -73,6 +73,8 @@ To forward bot/webhook messages in a guild channel, add `allowBotMessages: true`
 
 ## Tools
 
+Messaging:
+
 | Tool | Purpose |
 | --- | --- |
 | `reply` | Send to a channel. `chat_id` + `text`, optional `reply_to` and `files`. Auto-chunks. Automatically marks pending queue entries for that channel as responded. |
@@ -82,6 +84,16 @@ To forward bot/webhook messages in a guild channel, add `allowBotMessages: true`
 | `download_attachment` | Download attachments to `~/.claude/channels/discord/inbox/`. |
 | `check_queue` | Show all messages awaiting a response, oldest-first. Call after deep work or context compaction. |
 | `ack_message` | Mark a message as "seen, will respond." Stops escalation reminders for that message. |
+
+Cost management — Claude tunes these itself to silence known-noise bot messages and coalesce bursty signals. See [FILTERS.md](./FILTERS.md).
+
+| Tool | Purpose |
+| --- | --- |
+| `filter_add` | Add a regex filter for bot-authored messages. Matched messages get an emoji reaction (🔕 by convention) and never wake the model. Human messages are never filtered regardless of config. |
+| `filter_remove` | Remove a filter by id. |
+| `filter_list` | List configured filters. |
+| `batching_set` | Enable/tune per-channel batching. Debounces bursty signals (PR-thread chatter, Sentry alert storms) into one aggregated wake-up per channel or per thread. |
+| `batching_list` | List per-channel batching config. |
 
 ## Chat queue
 
@@ -114,7 +126,11 @@ Add to `access.json`:
 
 ## Access control
 
-See **[ACCESS.md](./ACCESS.md)** for DM policies, guild channels, mention detection, delivery config, and the `access.json` schema.
+See **[ACCESS.md](./ACCESS.md)** for DM policies, guild channels, mention detection, delivery config, and the `access.json` security-boundary keys.
+
+## Cost management (noise filters, batching)
+
+See **[FILTERS.md](./FILTERS.md)** for the cost-management keys in `access.json` and the `filter_*` / `batching_*` MCP tools Claude uses to self-manage them.
 
 ## Headless / VM deployment
 
